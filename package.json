@@ -1,0 +1,17 @@
+{
+  "name": "newtonite-ops",
+  "private": true,
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "migrate": "pnpm --filter server migrate",
+    "seed": "pnpm --filter server seed",
+    "dev:api": "pnpm --filter server dev",
+    "dev:worker": "pnpm --filter server worker",
+    "dev:web": "pnpm --filter web dev",
+    "test": "pnpm --filter server test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter server db:generate",
+    "db:studio": "pnpm --filter server db:studio"
+  }
+}

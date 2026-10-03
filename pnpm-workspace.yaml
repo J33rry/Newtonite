@@ -1,0 +1,9 @@
+packages:
+  - server
+  - web
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - lucide-react@1.51.0
