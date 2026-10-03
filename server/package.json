@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "e2e:db": "tsx src/e2e-db.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

@@ -42,6 +42,17 @@ export function EditPanel({ item }: { item: ItemDetail }) {
   const theirs = FIELDS.filter((f) => item[f] !== base[f]);
   const overlapping = mine.filter((f) => theirs.includes(f));
 
+  /**
+   * Move the edit onto the latest version. Fields you did not touch take the latest values, so only
+   * your own changes are re-applied; fields both of you changed keep your value (the button says so).
+   * Without this, an untouched field would still hold the old value, count as "your change" against
+   * the new base, and silently revert the other person's edit.
+   */
+  const rebase = () => {
+    setDraft(Object.fromEntries(FIELDS.map((f) => [f, mine.includes(f) ? draft[f] : item[f]])) as Draft);
+    setBase(item);
+  };
+
   const submit = () => {
     if (!mine.length) return setEditing(false);
     const patch = Object.fromEntries(mine.map((f) => [f, draft[f]]));
@@ -99,7 +110,7 @@ export function EditPanel({ item }: { item: ItemDetail }) {
             <p className="small">The fields you are editing were not changed (status, owner or priority may have).</p>
           )}
           <div className="actions">
-            <button className="btn" onClick={() => setBase(item)}>
+            <button className="btn" onClick={rebase}>
               {overlapping.length ? 'Keep my edits (overwrite theirs)' : 'Apply my edits on top'}
             </button>
             <button className="btn" onClick={() => setEditing(false)}>

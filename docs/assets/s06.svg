@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 180" width="1600" height="180" fill="none" role="img" aria-label="Section 06 — TESTING">
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+    .dash { stroke-dasharray: 1; stroke-dashoffset: 1; animation: dash 1.15s cubic-bezier(.6,0,.2,1) forwards; }
+    @keyframes dash { to { stroke-dashoffset: 0; } }
+    .f { opacity: 0; animation: f .8s ease forwards; }
+    @keyframes f { to { opacity: 1; } }
+    .rise { opacity: 0; animation: rise .9s cubic-bezier(.2,.7,.2,1) forwards; }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .d1 { animation-delay: .05s } .d3 { animation-delay: .45s } .d4 { animation-delay: .7s } .d5 { animation-delay: .95s }
+    .g1 .dash { animation-delay: .06s } .g2 .dash { animation-delay: .24s }
+    .rule { animation-duration: 1.3s; animation-delay: .55s }
+    @media (prefers-reduced-motion: reduce) {
+      .dash, .f, .rise { animation: none; }
+      .dash { stroke-dashoffset: 0; }
+      .f, .rise { opacity: 1; transform: none; }
+    }
+  </style>
+  <g fill="none" stroke="#000000" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"><g class="g1" transform="translate(45,46)"><ellipse class="dash" pathLength="1" cx="22" cy="45" rx="19" ry="42"/><path class="dash" pathLength="1" d="M34,16 L10,74"/></g><g class="g2" transform="translate(101,46)"><path class="dash" pathLength="1" d="M37,9 C33,5 28,3 23,3 C10,3 3,21 3,49 C3,73 11,87 23,87 C35,87 42,77 42,63 C42,49 35,39 23,39 C14,39 7,45 3,53"/></g></g>
+  <text class="mono rise d3" x="190" y="98" font-size="21" letter-spacing="7.5" fill="#000000">TESTING</text>
+  <line class="dash rule" pathLength="1" x1="401" y1="90" x2="1363" y2="90" stroke="#000000" stroke-width="1.5" opacity="0.45"/>
+  <text class="mono f d5" x="1556" y="96" text-anchor="end" font-size="17" letter-spacing="2" fill="#57606a">~/06-testing</text>
+</svg>

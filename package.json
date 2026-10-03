@@ -12,6 +12,7 @@
     "test": "pnpm --filter server test",
     "typecheck": "pnpm -r typecheck",
     "db:generate": "pnpm --filter server db:generate",
-    "db:studio": "pnpm --filter server db:studio"
+    "db:studio": "pnpm --filter server db:studio",
+    "test:e2e": "pnpm --filter e2e test"
   }
 }
