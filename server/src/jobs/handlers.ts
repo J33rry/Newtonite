@@ -1,7 +1,7 @@
-import { and, asc, eq, lt, notInArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db.js';
 import { idempotencyKeys, itemEvents, jobs, notifications, teamMemberships, users, watchers, workItems } from '../db/schema.js';
-import { publish } from '../services/events.js';
+import { publishNotifications } from '../services/events.js';
 import type { Handlers, Job } from './runner.js';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -102,46 +102,59 @@ async function notifyEvent(tx: Tx, job: Job): Promise<void> {
     .values([...userIds].map((user_id) => ({ user_id, item_id: event.item_id, kind, message, dedupe_key: `event:${event.id}` })))
     .onConflictDoNothing({ target: [notifications.user_id, notifications.dedupe_key] })
     .returning({ user_id: notifications.user_id });
-  for (const r of inserted) await publish(tx, { kind: 'notification', userId: r.user_id });
+  await publishNotifications(tx, inserted.map((r) => r.user_id));
 }
 
 /**
  * Periodic maintenance, scheduled once per minute (deduplicated across workers):
  *  * overdue items → notify the owner, or the team leads when nobody owns it (once per due date);
  *  * expire old idempotency keys and prune finished jobs.
- * Work is bounded per run so a large backlog cannot create a huge transaction; the next run continues.
+ * Every step is one set-based statement with a LIMIT, so the cost is a handful of round trips
+ * regardless of backlog, and a large backlog cannot create a huge transaction; the next run continues.
  */
-async function sweep(tx: Tx): Promise<void> {
-  const overdue = await tx
-    .select({ id: workItems.id, number: workItems.number, title: workItems.title, team_id: workItems.team_id, assignee_id: workItems.assignee_id, due_at: workItems.due_at })
-    .from(workItems)
-    .where(
-      and(
-        lt(workItems.due_at, sql`now()`),
-        notInArray(workItems.status, ['resolved', 'closed']),
-        sql`${workItems.overdue_alerted_for} IS DISTINCT FROM ${workItems.due_at}`,
-      ),
-    )
-    .orderBy(asc(workItems.due_at))
-    .limit(500)
-    .for('update', { skipLocked: true });
+const SWEEP_BATCH = 500;
+const PRUNE_BATCH = 5000;
 
-  for (const item of overdue) {
-    const recipients = item.assignee_id ? [item.assignee_id] : await teamLeads(tx, item.team_id);
-    const dedupe = `overdue:${item.id}:${item.due_at!.toISOString()}`;
-    for (const userId of recipients) {
-      const inserted = await tx
-        .insert(notifications)
-        .values({ user_id: userId, item_id: item.id, kind: 'overdue', message: `#${item.number} ${item.title} is overdue`, dedupe_key: dedupe })
-        .onConflictDoNothing({ target: [notifications.user_id, notifications.dedupe_key] })
-        .returning({ id: notifications.id });
-      if (inserted.length) await publish(tx, { kind: 'notification', userId });
-    }
-    // Moving the due date later re-arms the alert, because the stored value no longer matches.
-    await tx.update(workItems).set({ overdue_alerted_for: sql`${workItems.due_at}` }).where(eq(workItems.id, item.id));
-  }
-  await tx.delete(idempotencyKeys).where(lt(idempotencyKeys.created_at, sql`now() - interval '24 hours'`));
-  await tx.delete(jobs).where(and(eq(jobs.status, 'done'), lt(jobs.updated_at, sql`now() - interval '7 days'`)));
+async function sweep(tx: Tx): Promise<void> {
+  // Pick (and lock) a batch of newly overdue items, mark them alerted, and fan out notifications,
+  // all in one statement. The data-modifying CTE runs even though the final INSERT does not read it.
+  // Moving the due date later re-arms the alert, because overdue_alerted_for no longer matches.
+  const inserted = await tx.execute<{ user_id: string }>(sql`
+    WITH due AS (
+      SELECT ${workItems.id} AS id, ${workItems.number} AS number, ${workItems.title} AS title,
+             ${workItems.team_id} AS team_id, ${workItems.assignee_id} AS assignee_id, ${workItems.due_at} AS due_at
+      FROM ${workItems}
+      WHERE ${workItems.due_at} < now()
+        AND ${workItems.status} NOT IN ('resolved', 'closed')
+        AND ${workItems.overdue_alerted_for} IS DISTINCT FROM ${workItems.due_at}
+      ORDER BY ${workItems.due_at}
+      LIMIT ${SWEEP_BATCH}
+      FOR UPDATE SKIP LOCKED
+    ),
+    marked AS (
+      UPDATE ${workItems} SET overdue_alerted_for = due.due_at FROM due WHERE ${workItems.id} = due.id
+    ),
+    recipients AS (
+      SELECT due.*, due.assignee_id AS user_id FROM due WHERE due.assignee_id IS NOT NULL
+      UNION ALL
+      SELECT due.*, m.user_id
+      FROM due JOIN ${teamMemberships} m ON m.team_id = due.team_id AND m.role = 'lead'
+      WHERE due.assignee_id IS NULL
+    )
+    INSERT INTO ${notifications} (user_id, item_id, kind, message, dedupe_key)
+    SELECT user_id, id, 'overdue', '#' || number || ' ' || title || ' is overdue',
+           'overdue:' || id || ':' || extract(epoch FROM due_at)
+    FROM recipients
+    ON CONFLICT (user_id, dedupe_key) DO NOTHING
+    RETURNING user_id`);
+  await publishNotifications(tx, inserted.rows.map((r) => r.user_id));
+
+  await tx.execute(sql`
+    DELETE FROM ${idempotencyKeys} WHERE (user_id, key) IN (
+      SELECT user_id, key FROM ${idempotencyKeys} WHERE created_at < now() - interval '24 hours' LIMIT ${PRUNE_BATCH})`);
+  await tx.execute(sql`
+    DELETE FROM ${jobs} WHERE id IN (
+      SELECT id FROM ${jobs} WHERE status = 'done' AND updated_at < now() - interval '7 days' LIMIT ${PRUNE_BATCH})`);
 }
 
 export const handlers: Handlers = {

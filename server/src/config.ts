@@ -5,7 +5,10 @@ export const config = {
   /** Items in progress with no activity for this long are surfaced as "stale". */
   staleAfterHours: Number(process.env.STALE_AFTER_HOURS ?? 72),
   worker: {
+    /** Poll interval used only while the LISTEN wake-up connection is down. */
     pollIntervalMs: Number(process.env.WORKER_POLL_MS ?? 1000),
+    /** Longest an idle worker sleeps when no NOTIFY arrives; a safety net for a missed hint. */
+    maxIdleMs: Number(process.env.WORKER_MAX_IDLE_MS ?? 30_000),
     batchSize: Number(process.env.WORKER_BATCH ?? 20),
     /** A job "running" longer than this is assumed to belong to a crashed worker and is retried. */
     lockTimeoutMs: Number(process.env.WORKER_LOCK_TIMEOUT_MS ?? 5 * 60_000),

@@ -3,6 +3,7 @@ import { notifications as notificationsTable } from '../src/db/schema.js';
 import { handlers } from '../src/jobs/handlers.js';
 import { enqueue } from '../src/jobs/queue.js';
 import { JobRunner, type Handlers } from '../src/jobs/runner.js';
+import { JobWakeup } from '../src/jobs/wakeup.js';
 import { api, createItem, createTeam, createUser, resetData, setupApp, type TestCtx, type TestUser } from './helpers.js';
 
 /** Async processing must survive failures, duplicates and crashes without losing or doubling work. */
@@ -149,5 +150,68 @@ describe('job processing', () => {
     await enqueue(ctx.orm, 'sweep', {});
     await runner.tick();
     expect((await notifications(member.id)).filter((n) => n.kind === 'overdue')).toHaveLength(1);
+  });
+
+  it('alerts every lead once when an overdue item has no owner, in one set-based pass', async () => {
+    const lead2 = await createUser(ctx.db, 'Lead2', [[team, 'lead']]);
+    const due = new Date(Date.now() - 3600_000).toISOString();
+    for (let i = 0; i < 3; i++) await createItem(ctx.app, member, team, { dueAt: due });
+    await ctx.db.query('DELETE FROM jobs');
+    const runner = new JobRunner(ctx.orm, handlers, opts);
+    for (let run = 0; run < 2; run++) {
+      await enqueue(ctx.orm, 'sweep', {});
+      await runner.tick();
+    }
+    for (const user of [lead, lead2]) {
+      expect((await notifications(user.id)).filter((n) => n.kind === 'overdue')).toHaveLength(3);
+    }
+    expect((await notifications(member.id)).filter((n) => n.kind === 'overdue')).toHaveLength(0);
+  });
+
+  it('re-arms the overdue alert when the due date moves', async () => {
+    const item = await createItem(ctx.app, member, team, { dueAt: new Date(Date.now() - 3600_000).toISOString() });
+    const runner = new JobRunner(ctx.orm, handlers, opts);
+    await enqueue(ctx.orm, 'sweep', {});
+    await runner.tick();
+    await ctx.db.query(`UPDATE work_items SET due_at = now() - interval '5 minutes' WHERE id = $1`, [item.id]);
+    await enqueue(ctx.orm, 'sweep', {});
+    await runner.tick();
+    expect((await notifications(lead.id)).filter((n) => n.kind === 'overdue')).toHaveLength(2);
+  });
+});
+
+describe('worker wake-up', () => {
+  let wakeup: JobWakeup;
+
+  afterAll(async () => {
+    await wakeup?.stop();
+  });
+
+  it('wakes an idle worker as soon as a job is enqueued, instead of waiting out the poll', async () => {
+    wakeup = new JobWakeup(process.env.DATABASE_URL!, { error() {} });
+    await wakeup.start();
+    await wakeup.wait(0); // consume the start-up hint
+    const started = Date.now();
+    const waiting = wakeup.wait(10_000);
+    await enqueue(ctx.orm, 'sweep', {});
+    await waiting;
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('remembers a hint that arrived while the worker was busy', async () => {
+    await enqueue(ctx.orm, 'sweep', {});
+    await new Promise((r) => setTimeout(r, 100)); // NOTIFY delivered while nobody is waiting
+    const started = Date.now();
+    await wakeup.wait(10_000);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it('reports when the next delayed job is due, so the worker sleeps exactly until then', async () => {
+    const runner = new JobRunner(ctx.orm, handlers, opts);
+    await ctx.db.query('DELETE FROM jobs');
+    expect(await runner.nextRunAt()).toBeNull();
+    const at = new Date(Date.now() + 60_000);
+    await enqueue(ctx.orm, 'sweep', {}, { runAt: at });
+    expect((await runner.nextRunAt())?.getTime()).toBe(at.getTime());
   });
 });

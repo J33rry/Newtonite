@@ -49,7 +49,9 @@ migration into `server/drizzle/`. The API and the worker apply pending migration
 > `docker compose down -v && pnpm db:up && pnpm seed`.
 
 Configuration (all optional): `DATABASE_URL`, `PORT`, `API_URL` (for Next.js), `SEED_ITEMS`,
-`STALE_AFTER_HOURS`, `WORKER_POLL_MS`, `DEV_LOGIN=false` (disables the demo sign-in).
+`STALE_AFTER_HOURS`, `WORKER_MAX_IDLE_MS` (idle safety-net poll, default 30s; workers are woken by
+NOTIFY), `WORKER_POLL_MS` (poll interval only while that LISTEN connection is down),
+`DEV_LOGIN=false` (disables the demo sign-in).
 
 ## Demo users
 
@@ -184,7 +186,8 @@ claim query makes the race test fail.
 - **No admin UI** for teams and memberships; they come from the seed.
 - The **assign dropdown** loads all members of a team; large teams need a typeahead.
 - **Realtime:** after a transfer, viewers in the *old* team are not notified, because messages are
-  routed by the item's current team. List and dashboard refreshes are throttled to every 3s. Each
+  routed by the item's current team. List and dashboard refreshes are coalesced into 3–5s windows,
+  so lists can lag a change by a few seconds. Each
   API instance holds one SSE connection per open tab; very large fleets would want a dedicated
   realtime tier.
 - **Notifications** are in-app only, with no per-user preferences.

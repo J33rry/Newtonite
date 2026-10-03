@@ -82,7 +82,10 @@ export const useInsights = (days: number, team?: string) =>
     queryKey: keys.insights(days, team),
     queryFn: () => request<Insights>(`/api/insights${toQueryString({ days: String(days), team, tz: viewerTimeZone() })}`),
     placeholderData: keepPreviousData,
-    staleTime: 30_000,
+    // Daily trends: not refreshed by realtime events (that would fan out to every open tab), just
+    // polled once a minute while visible. TanStack pauses the interval in background tabs.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 
 /**

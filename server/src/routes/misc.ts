@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Database } from '../db.js';
 import { notifications, sessions, teamMemberships, teams, users, workItems } from '../db/schema.js';
 import { AppError, notFound } from '../domain/types.js';
-import { createSession, SESSION_COOKIE } from '../http/auth.js';
+import { createSession, SESSION_COOKIE, type ActorCache } from '../http/auth.js';
 import { runMutation } from '../http/mutation.js';
 import type { RealtimeHub } from '../realtime.js';
 import { canSeeTeam } from '../services/items.js';
@@ -56,10 +56,13 @@ export function publicRoutes(app: FastifyInstance, db: Database, opts: { devLogi
 }
 
 /** Routes that require a session (registered under the authenticate hook). */
-export function sessionRoutes(app: FastifyInstance, db: Database, hub: RealtimeHub) {
+export function sessionRoutes(app: FastifyInstance, db: Database, hub: RealtimeHub, actors: ActorCache) {
   app.post('/api/auth/logout', async (req, reply) => {
     const token = req.cookies[SESSION_COOKIE];
-    if (token) await db.delete(sessions).where(eq(sessions.token, token));
+    if (token) {
+      await db.delete(sessions).where(eq(sessions.token, token));
+      actors.evictToken(token); // immediately on this instance; other instances hear the DB trigger
+    }
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
     return { ok: true };
   });

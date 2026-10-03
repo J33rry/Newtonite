@@ -95,15 +95,24 @@ matches how intake actually works.
 - Items you cannot see return **404, not 403**, so the API does not reveal that they exist.
 - **Segregation of duties:** the requester or owner of an item cannot approve it, admins included.
   This is the "payment requiring approval" case from the brief.
-- Roles are loaded from the database on every request rather than embedded in a token, so revoking
-  a role takes effect immediately (this is tested).
+- Roles come from the database, not from a token, so revoking a role takes effect on the next
+  request (this is tested, with and without the cache below).
 
 **UI.** The detail endpoint returns the computed `permissions` and the list of workflow `actions`
 that are both allowed and valid in the current state. The UI renders exactly those, so it never
 re-implements the rules, and the server re-checks everything anyway.
 
-**Trade-off.** Loading memberships on each request costs one indexed query. At this scale that is
-negligible, and it beats stale permissions. A short-lived cache would be the next step.
+**Identity cache.** Session, user and memberships load in one query, and the result is cached in
+process for 10s so most requests run no auth query at all. Staleness is handled by push, not by the
+TTL: triggers on `sessions`, `team_memberships` and `users` NOTIFY `ops_auth` with the user id, every
+API instance evicts that user, and the user's SSE streams are closed so they reconnect under the new
+roles (or get a 401). Two edge cases are covered. First, while the LISTEN connection is down the
+cache is bypassed, because invalidations could be missed. Second, a generation counter stops a DB
+load that raced an invalidation from re-caching the stale result.
+
+**Trade-off.** Between commit and NOTIFY delivery (a few ms) an instance can still serve the old roles.
+Triggers rather than application code send the invalidation, so a change made from psql or a
+future admin tool is covered too.
 
 ---
 
@@ -129,13 +138,29 @@ idempotency keys, pruning finished jobs). These are things that can be late with
 - **Crashed worker.** A reaper re-queues jobs stuck in `running` past the lease timeout. If the
   original worker later wakes up, its "done" update matches nothing, so it rolls back its work
   instead of double-applying it (tested).
-- **Delay.** Users never wait on notifications. The overdue sweep is scheduled with a per-minute
-  dedupe key, so N workers do not run it N times.
+- **Delay.** Users never wait on notifications. An idle worker does not poll every second: a
+  statement-level trigger on `jobs` NOTIFYs `ops_jobs`, and the worker sleeps until that hint, the
+  next delayed retry's `run_at`, or a 30s safety net. A notification now lands ~10–25ms after the
+  change instead of up to 1s later, and an idle fleet issues almost no queries. The hint is only a
+  hint: claiming is still SKIP LOCKED, and a missed NOTIFY costs latency, not correctness. If the
+  LISTEN connection drops, the worker falls back to polling.
+- **Set-based work.** The overdue sweep is one statement: lock a batch with SKIP LOCKED, mark it
+  alerted, fan out to owners or leads, and insert the notifications. Pruning is batched the same
+  way. A notification job sends one NOTIFY per batch of recipients, not one per recipient. The sweep
+  is scheduled with a per-minute dedupe key, so N workers do not run it N times.
 
 **Realtime** uses Postgres `LISTEN/NOTIFY` fanned out over Server-Sent Events. A NOTIFY is only
 delivered on commit, so browsers are never told about a change that rolled back. Messages carry
 only ids and versions; the browser refetches through the normal authorized API. Delivery therefore
 does not need to be reliable: on reconnect the client refetches everything it shows.
+
+Every visible event reaches every viewer's tab, so the client's reaction decides the API load
+(`web/lib/realtime.ts`):
+- **Scoped.** A list filtered to another team is not refetched.
+- **Coalesced and jittered.** List and dashboard refreshes are batched into one per 3–5s window,
+  with a random offset, so a burst does not make thousands of tabs refetch in the same instant.
+- **Lazy in hidden tabs.** Data is only marked stale and refetched on focus.
+- **Insights skip realtime entirely.** They poll once a minute while on screen.
 
 **Why not Redis, Kafka or a hosted queue?** Postgres already gives transactional enqueueing, which
 is the hard part. A separate broker would bring back the dual-write problem and add an extra moving

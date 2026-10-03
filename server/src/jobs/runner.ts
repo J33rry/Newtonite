@@ -105,6 +105,15 @@ export class JobRunner {
     return reaped.length;
   }
 
+  /** When the next pending job becomes runnable (e.g. a retry in backoff), or null if none is queued. */
+  async nextRunAt(): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ at: sql<Date | null>`min(${jobs.run_at})`.mapWith(jobs.run_at) })
+      .from(jobs)
+      .where(eq(jobs.status, 'pending'));
+    return row?.at ?? null;
+  }
+
   /** Runs one polling cycle; returns how many jobs were processed. */
   async tick(): Promise<number> {
     const claimed = await this.claim();
